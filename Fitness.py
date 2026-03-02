@@ -28,25 +28,24 @@ def recalc_ctl(df):
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
 
-    # 重複日付対応（その日のTSS合計）
+    # 同日複数行対応（合計）
     df = df.groupby("Date", as_index=False).sum()
 
-    # 全日付を生成（TSS未入力日は0）
+    # 日付を連続化（未入力日はTSS=0）
     full_range = pd.date_range(df["Date"].min(), df["Date"].max())
     df = df.set_index("Date").reindex(full_range).fillna(0)
     df.index.name = "Date"
     df = df.reset_index()
 
-    ctl_list = []
-    atl_list = []
-
     ctl = 0
     atl = 0
+
+    ctl_list = []
+    atl_list = []
 
     for tss in df["TSS"]:
         ctl = ctl + (tss - ctl) / 42
         atl = atl + (tss - atl) / 7
-
         ctl_list.append(ctl)
         atl_list.append(atl)
 
@@ -63,13 +62,14 @@ def recalc_ctl(df):
 if "data" not in st.session_state:
     st.session_state.data = load_data()
 
+
 # ===============================
-# 2列レイアウト
+# レイアウト
 # ===============================
 left_col, right_col = st.columns([1, 2])
 
 # ======================================================
-# 左カラム（入力 + 一覧）
+# 左カラム（入力＋一覧）
 # ======================================================
 with left_col:
     st.header("TSS追加")
@@ -82,6 +82,7 @@ with left_col:
             "Date": [pd.to_datetime(input_date)],
             "TSS": [input_tss]
         })
+
         base_df = pd.concat([st.session_state.data, new_row], ignore_index=True)
         base_df.to_csv(DATA_FILE, index=False)
         st.session_state.data = load_data()
@@ -94,8 +95,14 @@ with left_col:
     raw_df = raw_df[raw_df["TSS"] > 0]
 
     if not raw_df.empty:
+
         raw_df_display = raw_df.copy()
         raw_df_display["Date"] = raw_df_display["Date"].dt.date
+
+        # 一覧表示
+        st.dataframe(raw_df_display, use_container_width=True)
+
+        st.divider()
 
         selected_index = st.selectbox(
             "削除する行を選択",
@@ -112,6 +119,7 @@ with left_col:
     else:
         st.write("データがありません")
 
+
 # ======================================================
 # 右カラム（グラフ）
 # ======================================================
@@ -122,7 +130,6 @@ with right_col:
 
     if not calc_df.empty:
 
-        # 表示期間選択
         mode = st.radio("表示期間", ["全期間", "期間指定"])
 
         if mode == "全期間":
@@ -136,7 +143,9 @@ with right_col:
                 (calc_df["Date"] <= pd.to_datetime(end))
             ]
 
-        # --- CTL / ATL / TSB 折れ線 ---
+        # ===============================
+        # CTL / ATL / TSB 折れ線
+        # ===============================
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(
@@ -171,7 +180,9 @@ with right_col:
 
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- TSS 棒グラフ ---
+        # ===============================
+        # TSS 棒グラフ
+        # ===============================
         tss_fig = go.Figure()
 
         tss_fig.add_trace(go.Bar(
@@ -181,8 +192,7 @@ with right_col:
         ))
 
         tss_fig.update_layout(
-            hovermode="x unified",
-            yaxis_title="TSS"
+            hovermode="x unified"
         )
 
         tss_fig.update_traces(
