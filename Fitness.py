@@ -1,239 +1,195 @@
 import streamlit as st
 import pandas as pd
-import os
 import plotly.graph_objects as go
+from datetime import datetime
+import os
 
-st.set_page_config(layout="wide")
-st.title("CTL / ATL / TSB 管理ツール")
+DATA_FILE = "tss_data.csv"
 
-FILE_NAME = "tss_data.csv"
+# ===============================
+# データ読み込み
+# ===============================
+def load_data():
+    if os.path.exists(DATA_FILE):
+        df = pd.read_csv(DATA_FILE)
+        df["Date"] = pd.to_datetime(df["Date"])
+    else:
+        df = pd.DataFrame(columns=["Date", "TSS"])
+    return df
 
-# ==========================
-# CTL再計算
-# ==========================
+
+# ===============================
+# CTL / ATL / TSB 再計算
+# ===============================
 def recalc_ctl(df):
-
     if df.empty:
-        return pd.DataFrame(columns=["Date", "TSS", "CTL", "ATL", "TSB"])
+        return df
 
     df["Date"] = pd.to_datetime(df["Date"])
+    df = df.sort_values("Date").reset_index(drop=True)
 
-    # 同日TSS合算
-    df = (
-        df.groupby("Date", as_index=False)["TSS"]
-        .sum()
-        .sort_values("Date")
-        .reset_index(drop=True)
-    )
+    # 重複日付対応（その日のTSS合計）
+    df = df.groupby("Date", as_index=False).sum()
 
-    # 日付連続化（0補完）
-    full_range = pd.date_range(
-        start=df["Date"].min(),
-        end=df["Date"].max(),
-        freq="D"
-    )
-
-    df = df.set_index("Date").reindex(full_range)
+    # 全日付を生成（TSS未入力日は0）
+    full_range = pd.date_range(df["Date"].min(), df["Date"].max())
+    df = df.set_index("Date").reindex(full_range).fillna(0)
     df.index.name = "Date"
-    df["TSS"] = df["TSS"].fillna(0)
     df = df.reset_index()
 
     ctl_list = []
     atl_list = []
-    tsb_list = []
 
-    ctl_prev = 0
-    atl_prev = 0
+    ctl = 0
+    atl = 0
 
-    for _, row in df.iterrows():
-        tss = row["TSS"]
-
-        ctl = ctl_prev + (tss - ctl_prev) / 42
-        atl = atl_prev + (tss - atl_prev) / 7
-        tsb = ctl - atl
+    for tss in df["TSS"]:
+        ctl = ctl + (tss - ctl) / 42
+        atl = atl + (tss - atl) / 7
 
         ctl_list.append(ctl)
         atl_list.append(atl)
-        tsb_list.append(tsb)
-
-        ctl_prev = ctl
-        atl_prev = atl
 
     df["CTL"] = ctl_list
     df["ATL"] = atl_list
-    df["TSB"] = tsb_list
+    df["TSB"] = df["CTL"] - df["ATL"]
 
     return df
 
 
-# ==========================
-# 初期読み込み
-# ==========================
+# ===============================
+# 初期化
+# ===============================
 if "data" not in st.session_state:
+    st.session_state.data = load_data()
 
-    if os.path.exists(FILE_NAME):
-        df_loaded = pd.read_csv(FILE_NAME)
-        st.session_state.data = recalc_ctl(df_loaded)
-    else:
-        st.session_state.data = pd.DataFrame(
-            columns=["Date", "TSS", "CTL", "ATL", "TSB"]
-        )
-
-# ==========================
+# ===============================
 # 2列レイアウト
-# ==========================
+# ===============================
 left_col, right_col = st.columns([1, 2])
 
-# ==========================
-# 左列：入力 + 一覧
-# ==========================
+# ======================================================
+# 左カラム（入力 + 一覧）
+# ======================================================
 with left_col:
+    st.header("TSS追加")
 
-    st.subheader("TSS追加")
-
-    date = st.date_input("日付")
-    tss = st.number_input("TSS", min_value=0.0)
+    input_date = st.date_input("日付", datetime.today())
+    input_tss = st.number_input("TSS", min_value=0.0, step=1.0)
 
     if st.button("追加"):
-
-        new_row = pd.DataFrame(
-            [[pd.to_datetime(date), tss]],
-            columns=["Date", "TSS"]
-        )
-
-        base_df = st.session_state.data[["Date", "TSS"]].copy()
-        base_df = pd.concat([base_df, new_row], ignore_index=True)
-
-        st.session_state.data = recalc_ctl(base_df)
-        st.session_state.data.to_csv(FILE_NAME, index=False)
-
-        st.success("保存しました")
+        new_row = pd.DataFrame({
+            "Date": [pd.to_datetime(input_date)],
+            "TSS": [input_tss]
+        })
+        base_df = pd.concat([st.session_state.data, new_row], ignore_index=True)
+        base_df.to_csv(DATA_FILE, index=False)
+        st.session_state.data = load_data()
+        st.success("追加しました")
 
     st.divider()
+    st.header("データ一覧（TSS>0のみ表示）")
 
-    st.subheader("データ一覧")
+    raw_df = st.session_state.data.copy()
+    raw_df = raw_df[raw_df["TSS"] > 0]
 
-    if not st.session_state.data.empty:
+    if not raw_df.empty:
+        raw_df_display = raw_df.copy()
+        raw_df_display["Date"] = raw_df_display["Date"].dt.date
 
-        df_display = (
-            st.session_state.data[
-                st.session_state.data["TSS"] > 0
-            ]
-            .copy()
-            .reset_index(drop=True)
+        selected_index = st.selectbox(
+            "削除する行を選択",
+            raw_df_display.index,
+            format_func=lambda x: f"{raw_df_display.loc[x, 'Date']} - TSS {raw_df_display.loc[x, 'TSS']}"
         )
 
-        if not df_display.empty:
+        if st.button("選択行を削除"):
+            st.session_state.data = st.session_state.data.drop(selected_index)
+            st.session_state.data.to_csv(DATA_FILE, index=False)
+            st.session_state.data = load_data()
+            st.success("削除しました")
 
-            df_display[["CTL", "ATL", "TSB"]] = (
-                df_display[["CTL", "ATL", "TSB"]].round(2)
-            )
+    else:
+        st.write("データがありません")
 
-            selected_index = st.selectbox(
-                "削除する日付",
-                df_display.index,
-                format_func=lambda x:
-                    f"{df_display.loc[x,'Date'].date()} | TSS={df_display.loc[x,'TSS']}"
-            )
-
-            if st.button("削除"):
-
-                delete_date = df_display.loc[selected_index, "Date"]
-
-                base_df = st.session_state.data[["Date", "TSS"]].copy()
-                base_df = base_df[base_df["Date"] != delete_date]
-
-                st.session_state.data = recalc_ctl(base_df)
-                st.session_state.data.to_csv(FILE_NAME, index=False)
-
-                st.success("削除しました")
-
-            st.dataframe(df_display, use_container_width=True)
-
-        else:
-            st.info("表示できるデータがありません")
-
-# ==========================
-# 右列：グラフ
-# ==========================
+# ======================================================
+# 右カラム（グラフ）
+# ======================================================
 with right_col:
+    st.header("パフォーマンス推移")
 
-    if not st.session_state.data.empty:
+    calc_df = recalc_ctl(st.session_state.data.copy())
 
-        st.subheader("推移グラフ")
+    if not calc_df.empty:
 
-        df_chart = st.session_state.data.sort_values("Date")
-
-        mode = st.radio(
-            "表示期間",
-            ["全期間", "期間指定"],
-            horizontal=True
-        )
+        # 表示期間選択
+        mode = st.radio("表示期間", ["全期間", "期間指定"])
 
         if mode == "全期間":
-            df_filtered = df_chart
+            filtered_df = calc_df
         else:
-            min_date = df_chart["Date"].min()
-            max_date = df_chart["Date"].max()
+            start = st.date_input("開始日", calc_df["Date"].min().date())
+            end = st.date_input("終了日", calc_df["Date"].max().date())
 
-            col1, col2 = st.columns(2)
-
-            with col1:
-                start_date = st.date_input(
-                    "開始日",
-                    value=min_date,
-                    min_value=min_date,
-                    max_value=max_date
-                )
-
-            with col2:
-                end_date = st.date_input(
-                    "終了日",
-                    value=max_date,
-                    min_value=min_date,
-                    max_value=max_date
-                )
-
-            if start_date > end_date:
-                st.warning("開始日は終了日より前にしてください")
-                st.stop()
-
-            df_filtered = df_chart[
-                (df_chart["Date"] >= pd.to_datetime(start_date)) &
-                (df_chart["Date"] <= pd.to_datetime(end_date))
+            filtered_df = calc_df[
+                (calc_df["Date"] >= pd.to_datetime(start)) &
+                (calc_df["Date"] <= pd.to_datetime(end))
             ]
 
+        # --- CTL / ATL / TSB 折れ線 ---
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(
-            x=df_filtered["Date"],
-            y=df_filtered["CTL"],
+            x=filtered_df["Date"],
+            y=filtered_df["CTL"],
             mode="lines",
-            name="CTL",
-            hovertemplate="CTL: %{y:.3f}<extra></extra>"
+            name="CTL"
         ))
 
         fig.add_trace(go.Scatter(
-            x=df_filtered["Date"],
-            y=df_filtered["ATL"],
+            x=filtered_df["Date"],
+            y=filtered_df["ATL"],
             mode="lines",
-            name="ATL",
-            hovertemplate="ATL: %{y:.3f}<extra></extra>"
+            name="ATL"
         ))
 
         fig.add_trace(go.Scatter(
-            x=df_filtered["Date"],
-            y=df_filtered["TSB"],
+            x=filtered_df["Date"],
+            y=filtered_df["TSB"],
             mode="lines",
-            name="TSB",
-            hovertemplate="TSB: %{y:.3f}<extra></extra>"
+            name="TSB"
         ))
 
         fig.update_layout(
             hovermode="x unified",
-            xaxis_title="Date",
-            yaxis_title="Value",
-            height=600
+            yaxis_tickformat=".2f"
+        )
+
+        fig.update_traces(
+            hovertemplate="Date: %{x}<br>Value: %{y:.3f}<extra></extra>"
         )
 
         st.plotly_chart(fig, use_container_width=True)
+
+        # --- TSS 棒グラフ ---
+        tss_fig = go.Figure()
+
+        tss_fig.add_trace(go.Bar(
+            x=filtered_df["Date"],
+            y=filtered_df["TSS"],
+            name="TSS"
+        ))
+
+        tss_fig.update_layout(
+            hovermode="x unified",
+            yaxis_title="TSS"
+        )
+
+        tss_fig.update_traces(
+            hovertemplate="Date: %{x}<br>TSS: %{y:.3f}<extra></extra>"
+        )
+
+        st.plotly_chart(tss_fig, use_container_width=True)
+
+    else:
+        st.write("データがありません")
