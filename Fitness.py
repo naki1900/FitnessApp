@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import os
 
+st.set_page_config(layout="wide")
 DATA_FILE = "tss_data.csv"
 
 # ===============================
@@ -28,10 +29,8 @@ def recalc_ctl(df):
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
 
-    # 同日合計
     df = df.groupby("Date", as_index=False).sum()
 
-    # 日付連続化
     full_range = pd.date_range(df["Date"].min(), df["Date"].max())
     df = df.set_index("Date").reindex(full_range).fillna(0)
     df.index.name = "Date"
@@ -61,6 +60,9 @@ def recalc_ctl(df):
 if "data" not in st.session_state:
     st.session_state.data = load_data()
 
+if "ftp" not in st.session_state:
+    st.session_state.ftp = 250.0
+
 
 # ===============================
 # レイアウト
@@ -72,7 +74,35 @@ left_col, right_col = st.columns([1, 2])
 # ======================================================
 with left_col:
 
-    st.header("TSS追加")
+    st.header("パワーからTSS自動計算")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        ftp_input = st.number_input(
+            "FTP",
+            min_value=1.0,
+            value=st.session_state.ftp,
+            step=1.0
+        )
+
+    with col2:
+        avg_power = st.number_input("平均推定W", min_value=0.0, step=1.0)
+
+    with col3:
+        duration_min = st.number_input("時間(分)", min_value=0.0, step=1.0)
+
+    st.session_state.ftp = ftp_input
+
+    if avg_power > 0 and duration_min > 0:
+        duration_hour = duration_min / 60
+        intensity_factor = avg_power / ftp_input
+        calculated_tss = duration_hour * (intensity_factor ** 2) * 100
+        st.success(f"計算TSS: {calculated_tss:.2f}")
+
+    st.divider()
+
+    st.header("TSS手動追加")
 
     input_date = st.date_input("日付", datetime.today())
     input_tss = st.number_input("TSS", min_value=0.0, step=1.0)
@@ -90,31 +120,23 @@ with left_col:
 
     st.divider()
 
-    st.header("データ一覧（TSS>0のみ表示）")
+    # ===============================
+    # 🔥 改善されたデータ一覧
+    # ===============================
+    st.header("データ一覧（CTL/ATL/TSB含む）")
 
-    raw_df = st.session_state.data.copy()
-    raw_df = raw_df[raw_df["TSS"] > 0]
+    calc_df = recalc_ctl(st.session_state.data.copy())
 
-    if not raw_df.empty:
+    if not calc_df.empty:
 
-        raw_df_display = raw_df.copy()
-        raw_df_display["Date"] = raw_df_display["Date"].dt.date
+        display_df = calc_df.copy()
+        display_df["Date"] = display_df["Date"].dt.date
 
-        st.dataframe(raw_df_display, use_container_width=True)
-
-        st.divider()
-
-        selected_index = st.selectbox(
-            "削除する行を選択",
-            raw_df_display.index,
-            format_func=lambda x: f"{raw_df_display.loc[x, 'Date']} - TSS {raw_df_display.loc[x, 'TSS']:.2f}"
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            height=500   # ← 高さ拡張
         )
-
-        if st.button("選択行を削除"):
-            st.session_state.data = st.session_state.data.drop(selected_index)
-            st.session_state.data.to_csv(DATA_FILE, index=False)
-            st.session_state.data = load_data()
-            st.success("削除しました")
 
     else:
         st.write("データがありません")
