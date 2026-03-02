@@ -7,6 +7,7 @@ import os
 st.set_page_config(layout="wide")
 
 DATA_FILE = "tss_data.csv"
+FTP_FILE = "ftp_setting.csv"
 
 # ===============================
 # データ読み込み
@@ -18,6 +19,24 @@ def load_data():
     else:
         df = pd.DataFrame(columns=["Date", "TSS"])
     return df
+
+
+# ===============================
+# FTP 読み込み・保存
+# ===============================
+def load_ftp():
+    if os.path.exists(FTP_FILE):
+        df = pd.read_csv(FTP_FILE)
+        return float(df.loc[0, "FTP"])
+    else:
+        df = pd.DataFrame({"FTP": [250.0]})
+        df.to_csv(FTP_FILE, index=False)
+        return 250.0
+
+
+def save_ftp(value):
+    df = pd.DataFrame({"FTP": [value]})
+    df.to_csv(FTP_FILE, index=False)
 
 
 # ===============================
@@ -62,7 +81,7 @@ if "data" not in st.session_state:
     st.session_state.data = load_data()
 
 if "ftp" not in st.session_state:
-    st.session_state.ftp = 250.0
+    st.session_state.ftp = load_ftp()
 
 
 left_col, right_col = st.columns([1, 2])
@@ -84,8 +103,13 @@ with left_col:
             "FTP",
             min_value=1.0,
             value=st.session_state.ftp,
-            step=1.0
+            step=1.0,
         )
+
+        # FTP変更があれば保存
+        if ftp_input != st.session_state.ftp:
+            st.session_state.ftp = ftp_input
+            save_ftp(ftp_input)
 
     with col2:
         avg_power = st.number_input("平均推定W", min_value=0.0, step=1.0)
@@ -93,11 +117,9 @@ with left_col:
     with col3:
         duration_min = st.number_input("時間(分)", min_value=0.0, step=1.0)
 
-    st.session_state.ftp = ftp_input
-
     if avg_power > 0 and duration_min > 0:
         duration_hour = duration_min / 60
-        intensity_factor = avg_power / ftp_input
+        intensity_factor = avg_power / st.session_state.ftp
         calculated_tss = duration_hour * (intensity_factor ** 2) * 100
         st.success(f"計算TSS: {calculated_tss:.2f}")
 
@@ -125,19 +147,16 @@ with left_col:
     st.divider()
 
     # -------------------------------
-    # ✅ データ一覧（CTL表示対応版）
+    # データ一覧（CTL表示対応）
     # -------------------------------
     st.header("データ一覧（TSS>0のみ表示）")
 
     calc_df = recalc_ctl(st.session_state.data.copy())
-
     display_df = calc_df[calc_df["TSS"] > 0].copy()
 
     if not display_df.empty:
 
         display_df["Date"] = display_df["Date"].dt.date
-
-        # 小数整理
         display_df["CTL"] = display_df["CTL"].round(2)
         display_df["ATL"] = display_df["ATL"].round(2)
         display_df["TSB"] = display_df["TSB"].round(2)
@@ -178,10 +197,16 @@ with right_col:
         fig.add_trace(go.Scatter(x=calc_df["Date"], y=calc_df["ATL"], mode="lines", name="ATL"))
         fig.add_trace(go.Scatter(x=calc_df["Date"], y=calc_df["TSB"], mode="lines", name="TSB"))
 
+        fig.update_layout(hovermode="x unified", yaxis_tickformat=".2f")
+        fig.update_traces(hovertemplate="Date: %{x}<br>Value: %{y:.2f}<extra></extra>")
+
         st.plotly_chart(fig, use_container_width=True)
 
         tss_fig = go.Figure()
         tss_fig.add_trace(go.Bar(x=calc_df["Date"], y=calc_df["TSS"], name="TSS"))
+        tss_fig.update_layout(hovermode="x unified")
+        tss_fig.update_traces(hovertemplate="Date: %{x}<br>TSS: %{y:.2f}<extra></extra>")
+
         st.plotly_chart(tss_fig, use_container_width=True)
 
     else:
