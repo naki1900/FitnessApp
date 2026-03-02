@@ -64,6 +64,9 @@ def recalc_ctl(df):
 if "data" not in st.session_state:
     st.session_state.data = load_data()
 
+if "ftp" not in st.session_state:
+    st.session_state.ftp = 250.0
+
 
 # ===============================
 # レイアウト
@@ -75,6 +78,41 @@ left_col, right_col = st.columns([1, 2])
 # ======================================================
 with left_col:
 
+    # ===============================
+    # 🔹 パワーからTSS自動計算（保存なし）
+    # ===============================
+    st.header("パワーからTSS自動計算")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        ftp_input = st.number_input(
+            "FTP",
+            min_value=1.0,
+            value=st.session_state.ftp,
+            step=1.0
+        )
+
+    with col2:
+        avg_power = st.number_input("平均推定W", min_value=0.0, step=1.0)
+
+    with col3:
+        duration_min = st.number_input("時間(分)", min_value=0.0, step=1.0)
+
+    st.session_state.ftp = ftp_input
+
+    if avg_power > 0 and duration_min > 0:
+        duration_hour = duration_min / 60
+        intensity_factor = avg_power / ftp_input
+        calculated_tss = duration_hour * (intensity_factor ** 2) * 100
+
+        st.success(f"計算TSS: {calculated_tss:.2f}")
+
+    st.divider()
+
+    # ===============================
+    # 🔹 手動TSS追加
+    # ===============================
     st.header("TSS追加")
 
     input_date = st.date_input("日付", datetime.today())
@@ -93,11 +131,13 @@ with left_col:
 
     st.divider()
 
+    # ===============================
+    # 🔹 データ一覧（TSS>0のみ）
+    # ===============================
     st.header("データ一覧（TSS>0のみ表示）")
 
-    # 🔥 ここが重要
     raw_df = st.session_state.data.copy()
-    raw_df = raw_df[raw_df["TSS"] > 0]   # ← 0を除外
+    raw_df = raw_df[raw_df["TSS"] > 0]
 
     if not raw_df.empty:
 
