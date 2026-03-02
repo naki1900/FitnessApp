@@ -28,8 +28,10 @@ def recalc_ctl(df):
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
 
+    # 同日合計
     df = df.groupby("Date", as_index=False).sum()
 
+    # 日付連続化
     full_range = pd.date_range(df["Date"].min(), df["Date"].max())
     df = df.set_index("Date").reindex(full_range).fillna(0)
     df.index.name = "Date"
@@ -60,7 +62,7 @@ if "data" not in st.session_state:
     st.session_state.data = load_data()
 
 if "ftp" not in st.session_state:
-    st.session_state.ftp = 250.0  # 初期値
+    st.session_state.ftp = 250.0
 
 
 # ===============================
@@ -74,56 +76,46 @@ left_col, right_col = st.columns([1, 2])
 with left_col:
 
     # ============================================
-    # 🔥 TSS自動計算フォーム（NEW）
+    # パワーからTSS自動計算（コンパクト版）
     # ============================================
     st.header("パワーからTSS自動計算")
 
-    auto_date = st.date_input("日付（自動計算用）", datetime.today(), key="auto_date")
+    col1, col2, col3 = st.columns(3)
 
-    ftp_input = st.number_input(
-        "FTP",
-        min_value=1.0,
-        value=st.session_state.ftp,
-        step=1.0
-    )
+    with col1:
+        ftp_input = st.number_input(
+            "FTP",
+            min_value=1.0,
+            value=st.session_state.ftp,
+            step=1.0
+        )
 
-    avg_power = st.number_input("平均推定パワー (W)", min_value=0.0, step=1.0)
-    duration_min = st.number_input("時間（分）", min_value=0.0, step=1.0)
+    with col2:
+        avg_power = st.number_input("平均推定W", min_value=0.0, step=1.0)
 
-    # FTP保存
+    with col3:
+        duration_min = st.number_input("時間(分)", min_value=0.0, step=1.0)
+
     st.session_state.ftp = ftp_input
 
-    calculated_tss = None
-
-    if avg_power > 0 and duration_min > 0 and ftp_input > 0:
+    if avg_power > 0 and duration_min > 0:
         duration_hour = duration_min / 60
         intensity_factor = avg_power / ftp_input
         calculated_tss = duration_hour * (intensity_factor ** 2) * 100
 
-        st.info(f"計算TSS: {calculated_tss:.2f}")
-
-        if st.button("計算したTSSを保存"):
-            new_row = pd.DataFrame({
-                "Date": [pd.to_datetime(auto_date)],
-                "TSS": [calculated_tss]
-            })
-
-            base_df = pd.concat([st.session_state.data, new_row], ignore_index=True)
-            base_df.to_csv(DATA_FILE, index=False)
-            st.session_state.data = load_data()
-            st.success("保存しました")
+        st.success(f"計算TSS: {calculated_tss:.2f}")
 
     st.divider()
 
     # ============================================
-    # 従来の手動TSS追加
+    # 手動TSS追加
     # ============================================
     st.header("TSS手動追加")
 
     input_date = st.date_input("日付", datetime.today())
     input_tss = st.number_input("TSS", min_value=0.0, step=1.0)
 
-    if st.button("手動で追加"):
+    if st.button("追加"):
         new_row = pd.DataFrame({
             "Date": [pd.to_datetime(input_date)],
             "TSS": [input_tss]
@@ -135,7 +127,11 @@ with left_col:
         st.success("追加しました")
 
     st.divider()
-    st.header("データ一覧（TSS>0のみ表示）")
+
+    # ============================================
+    # データ一覧
+    # ============================================
+    st.header("データ一覧（TSS>0のみ）")
 
     raw_df = st.session_state.data.copy()
     raw_df = raw_df[raw_df["TSS"] > 0]
@@ -150,12 +146,12 @@ with left_col:
         st.divider()
 
         selected_index = st.selectbox(
-            "削除する行を選択",
+            "削除する行",
             raw_df_display.index,
             format_func=lambda x: f"{raw_df_display.loc[x, 'Date']} - TSS {raw_df_display.loc[x, 'TSS']:.2f}"
         )
 
-        if st.button("選択行を削除"):
+        if st.button("削除"):
             st.session_state.data = st.session_state.data.drop(selected_index)
             st.session_state.data.to_csv(DATA_FILE, index=False)
             st.session_state.data = load_data()
@@ -188,9 +184,8 @@ with right_col:
                 (calc_df["Date"] <= pd.to_datetime(end))
             ]
 
-        # 折れ線グラフ
+        # CTL/ATL/TSB
         fig = go.Figure()
-
         fig.add_trace(go.Scatter(x=filtered_df["Date"], y=filtered_df["CTL"], mode="lines", name="CTL"))
         fig.add_trace(go.Scatter(x=filtered_df["Date"], y=filtered_df["ATL"], mode="lines", name="ATL"))
         fig.add_trace(go.Scatter(x=filtered_df["Date"], y=filtered_df["TSB"], mode="lines", name="TSB"))
