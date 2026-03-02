@@ -28,10 +28,8 @@ def recalc_ctl(df):
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").reset_index(drop=True)
 
-    # 同日複数行対応（合計）
     df = df.groupby("Date", as_index=False).sum()
 
-    # 日付を連続化（未入力日はTSS=0）
     full_range = pd.date_range(df["Date"].min(), df["Date"].max())
     df = df.set_index("Date").reindex(full_range).fillna(0)
     df.index.name = "Date"
@@ -39,7 +37,6 @@ def recalc_ctl(df):
 
     ctl = 0
     atl = 0
-
     ctl_list = []
     atl_list = []
 
@@ -62,6 +59,9 @@ def recalc_ctl(df):
 if "data" not in st.session_state:
     st.session_state.data = load_data()
 
+if "ftp" not in st.session_state:
+    st.session_state.ftp = 250.0  # 初期値
+
 
 # ===============================
 # レイアウト
@@ -69,15 +69,61 @@ if "data" not in st.session_state:
 left_col, right_col = st.columns([1, 2])
 
 # ======================================================
-# 左カラム（入力＋一覧）
+# 左カラム
 # ======================================================
 with left_col:
-    st.header("TSS追加")
+
+    # ============================================
+    # 🔥 TSS自動計算フォーム（NEW）
+    # ============================================
+    st.header("パワーからTSS自動計算")
+
+    auto_date = st.date_input("日付（自動計算用）", datetime.today(), key="auto_date")
+
+    ftp_input = st.number_input(
+        "FTP",
+        min_value=1.0,
+        value=st.session_state.ftp,
+        step=1.0
+    )
+
+    avg_power = st.number_input("平均推定パワー (W)", min_value=0.0, step=1.0)
+    duration_min = st.number_input("時間（分）", min_value=0.0, step=1.0)
+
+    # FTP保存
+    st.session_state.ftp = ftp_input
+
+    calculated_tss = None
+
+    if avg_power > 0 and duration_min > 0 and ftp_input > 0:
+        duration_hour = duration_min / 60
+        intensity_factor = avg_power / ftp_input
+        calculated_tss = duration_hour * (intensity_factor ** 2) * 100
+
+        st.info(f"計算TSS: {calculated_tss:.2f}")
+
+        if st.button("計算したTSSを保存"):
+            new_row = pd.DataFrame({
+                "Date": [pd.to_datetime(auto_date)],
+                "TSS": [calculated_tss]
+            })
+
+            base_df = pd.concat([st.session_state.data, new_row], ignore_index=True)
+            base_df.to_csv(DATA_FILE, index=False)
+            st.session_state.data = load_data()
+            st.success("保存しました")
+
+    st.divider()
+
+    # ============================================
+    # 従来の手動TSS追加
+    # ============================================
+    st.header("TSS手動追加")
 
     input_date = st.date_input("日付", datetime.today())
     input_tss = st.number_input("TSS", min_value=0.0, step=1.0)
 
-    if st.button("追加"):
+    if st.button("手動で追加"):
         new_row = pd.DataFrame({
             "Date": [pd.to_datetime(input_date)],
             "TSS": [input_tss]
@@ -99,7 +145,6 @@ with left_col:
         raw_df_display = raw_df.copy()
         raw_df_display["Date"] = raw_df_display["Date"].dt.date
 
-        # 一覧表示
         st.dataframe(raw_df_display, use_container_width=True)
 
         st.divider()
@@ -107,7 +152,7 @@ with left_col:
         selected_index = st.selectbox(
             "削除する行を選択",
             raw_df_display.index,
-            format_func=lambda x: f"{raw_df_display.loc[x, 'Date']} - TSS {raw_df_display.loc[x, 'TSS']}"
+            format_func=lambda x: f"{raw_df_display.loc[x, 'Date']} - TSS {raw_df_display.loc[x, 'TSS']:.2f}"
         )
 
         if st.button("選択行を削除"):
@@ -143,61 +188,23 @@ with right_col:
                 (calc_df["Date"] <= pd.to_datetime(end))
             ]
 
-        # ===============================
-        # CTL / ATL / TSB 折れ線
-        # ===============================
+        # 折れ線グラフ
         fig = go.Figure()
 
-        fig.add_trace(go.Scatter(
-            x=filtered_df["Date"],
-            y=filtered_df["CTL"],
-            mode="lines",
-            name="CTL"
-        ))
+        fig.add_trace(go.Scatter(x=filtered_df["Date"], y=filtered_df["CTL"], mode="lines", name="CTL"))
+        fig.add_trace(go.Scatter(x=filtered_df["Date"], y=filtered_df["ATL"], mode="lines", name="ATL"))
+        fig.add_trace(go.Scatter(x=filtered_df["Date"], y=filtered_df["TSB"], mode="lines", name="TSB"))
 
-        fig.add_trace(go.Scatter(
-            x=filtered_df["Date"],
-            y=filtered_df["ATL"],
-            mode="lines",
-            name="ATL"
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=filtered_df["Date"],
-            y=filtered_df["TSB"],
-            mode="lines",
-            name="TSB"
-        ))
-
-        fig.update_layout(
-            hovermode="x unified",
-            yaxis_tickformat=".2f"
-        )
-
-        fig.update_traces(
-            hovertemplate="Date: %{x}<br>Value: %{y:.3f}<extra></extra>"
-        )
+        fig.update_layout(hovermode="x unified", yaxis_tickformat=".2f")
+        fig.update_traces(hovertemplate="Date: %{x}<br>Value: %{y:.3f}<extra></extra>")
 
         st.plotly_chart(fig, use_container_width=True)
 
-        # ===============================
-        # TSS 棒グラフ
-        # ===============================
+        # TSS棒グラフ
         tss_fig = go.Figure()
-
-        tss_fig.add_trace(go.Bar(
-            x=filtered_df["Date"],
-            y=filtered_df["TSS"],
-            name="TSS"
-        ))
-
-        tss_fig.update_layout(
-            hovermode="x unified"
-        )
-
-        tss_fig.update_traces(
-            hovertemplate="Date: %{x}<br>TSS: %{y:.3f}<extra></extra>"
-        )
+        tss_fig.add_trace(go.Bar(x=filtered_df["Date"], y=filtered_df["TSS"], name="TSS"))
+        tss_fig.update_layout(hovermode="x unified")
+        tss_fig.update_traces(hovertemplate="Date: %{x}<br>TSS: %{y:.3f}<extra></extra>")
 
         st.plotly_chart(tss_fig, use_container_width=True)
 
